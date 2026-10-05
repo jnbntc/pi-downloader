@@ -1,0 +1,79 @@
+services:
+  telegram-api:
+    image: ${TELEGRAM_API_IMAGE:-aiogram/telegram-bot-api@sha256:b5475a6c2cc7e61851ff06454e80dc1a509d639e1ab5312b14701209ec16b2f4}
+    container_name: telegram-api
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TG_API_ID:?Set TG_API_ID in .env}
+      TELEGRAM_API_HASH: ${TG_API_HASH:?Set TG_API_HASH in .env}
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_TEMP_DIR: /tmp/telegram-bot-api
+    volumes:
+      - ${APPDATA_DIR:-./data/app-data}/telegram-api:/var/lib/telegram-bot-api
+      - ${WORKSPACE_DIR_HOST:-./data/workspace}/telegram-cache:/tmp/telegram-bot-api
+      - ${MEDIA_DIR:-./data/media}:/data/media:ro
+
+  qbittorrent:
+    image: ${QBIT_IMAGE:-lscr.io/linuxserver/qbittorrent@sha256:b024436f8ca665d16d9a997d26fd27fdf867ee5566ba09f32764e7b2976d3e02}
+    container_name: qbittorrent
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      WEBUI_PORT: "8080"
+    ports:
+      - "${QBIT_BIND_IP:-127.0.0.1}:8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    volumes:
+      - ${APPDATA_DIR:-./data/app-data}/qbittorrent:/config
+      - ${TORRENTS_DIR:-./data/torrents}:/downloads
+
+  orchestrator:
+    build: ./orchestrator
+    container_name: download-orchestrator
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      - telegram-api
+      - qbittorrent
+    environment:
+      BOT_TOKEN: ${TG_BOT_TOKEN:?Set TG_BOT_TOKEN in .env}
+      ALLOWED_USER_IDS: ${ALLOWED_USER_IDS:?Set ALLOWED_USER_IDS in .env}
+      ALLOWED_CHAT_IDS: ${ALLOWED_CHAT_IDS:-${ALLOWED_USER_IDS}}
+      QBIT_USERNAME: ${QBIT_USERNAME:-admin}
+      QBIT_PASSWORD: ${QBIT_PASSWORD:?Set QBIT_PASSWORD in .env}
+      TELEGRAM_API_URL: http://telegram-api:8081/bot
+      QBIT_HOST: http://qbittorrent:8080
+      WORKSPACE_DIR: /data/workspace
+      VAULT_DIR: /data/media
+      TORRENT_DIR: /data/torrents
+      TELEGRAM_CACHE_DIR: /var/lib/telegram-bot-api
+      MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-2}
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-50}
+      MAX_MEDIA_FILES: ${MAX_MEDIA_FILES:-10}
+      MAX_DOWNLOAD_BYTES: ${MAX_DOWNLOAD_BYTES:-8000000000}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2000000000}
+      MAX_EXTRACT_BYTES: ${MAX_EXTRACT_BYTES:-10000000000}
+      MAX_EXTRACT_FILES: ${MAX_EXTRACT_FILES:-10000}
+      TASK_TIMEOUT: ${TASK_TIMEOUT:-900}
+      VIDEO_TIMEOUT: ${VIDEO_TIMEOUT:-3600}
+    volumes:
+      - ./orchestrator:/app:ro
+      - ${WORKSPACE_DIR_HOST:-./data/workspace}:/data/workspace
+      - ${MEDIA_DIR:-./data/media}:/data/media
+      - ${TORRENTS_DIR:-./data/torrents}:/data/torrents:ro
+      - /sys/class/thermal:/sys/class/thermal:ro
+      - ${APPDATA_DIR:-./data/app-data}/telegram-api:/var/lib/telegram-bot-api:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: ${ORCHESTRATOR_MEMORY_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
