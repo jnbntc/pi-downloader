@@ -3,6 +3,22 @@ import json
 import sqlite3
 
 
+def message_reference(message):
+    """Persist routing data, excluding preview objects and SDK default sentinels."""
+    data = {"message_id": message.message_id, "date": int(message.date.timestamp()),
+            "chat": {"id": message.chat.id, "type": message.chat.type}}
+    if message.from_user:
+        data["from"] = {"id": message.from_user.id, "is_bot": message.from_user.is_bot,
+                        "first_name": "User"}
+    for field in ["message_thread_id", "is_topic_message", "business_connection_id"]:
+        value = getattr(message, field, None)
+        if value is not None:
+            data[field] = value
+    if message.direct_messages_topic:
+        data["direct_messages_topic"] = {"topic_id": message.direct_messages_topic.topic_id}
+    return data
+
+
 class JobStore:
     def __init__(self, path):
         self.path = path
@@ -15,8 +31,8 @@ class JobStore:
     def put(self, item):
         data = json.dumps({
             "task_type": item.task_type, "payload": item.payload,
-            "message": item.message.model_dump(mode="json", exclude_none=True),
-            "status_msg": item.status_msg.model_dump(mode="json", exclude_none=True),
+            "message": message_reference(item.message),
+            "status_msg": message_reference(item.status_msg),
         })
         with sqlite3.connect(self.path) as db:
             db.execute("INSERT INTO jobs(id, data) VALUES (?, ?)", (item.job_id, data))

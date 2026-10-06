@@ -9,6 +9,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from pydantic_core import PydanticSerializationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "orchestrator"))
 from aiogram import types
@@ -21,6 +22,7 @@ from video import MediaOutput
 
 
 class FakeBot:
+    id = 1
     def __init__(self):
         self.calls = []
         self.file_path = None
@@ -190,6 +192,53 @@ class RegressionTests(unittest.IsolatedAsyncioTestCase):
         self.manager.queue.put_nowait("already full")
         accepted = await self.manager.add_task(worker.TaskItem("media_dl", "url", message(self.bot), message(self.bot)))
         self.assertFalse(accepted)
+        self.assertEqual(await asyncio.to_thread(self.manager.store.pending), [])
+
+    async def test_link_previews_enter_queue_through_the_message_dispatcher(self):
+        self.manager._process_media = AsyncMock()
+        await self.manager.start(self.bot)
+        urls = ["https://x.com/test/status/1", "https://www.instagram.com/reel/example/"]
+        for index, url in enumerate(urls, 1):
+            incoming = message(self.bot, text=url, link_preview_options={"url": url})
+            # Telegram link previews contain SDK Default values that cannot be JSON-dumped.
+            with self.assertRaises(PydanticSerializationError):
+                incoming.model_dump(mode="json", exclude_none=True)
+            await main.dp.feed_update(self.bot, types.Update(update_id=index, message=incoming))
+        await asyncio.wait_for(self.manager.queue.join(), 3)
+        self.assertEqual([call.args[0].payload for call in self.manager._process_media.call_args_list], urls)
+        self.assertEqual(await asyncio.to_thread(self.manager.store.pending), [])
+
+    async def test_preview_job_recovers_with_sender_and_topic_context(self):
+        await asyncio.to_thread(self.manager.store.initialize)
+        incoming = message(self.bot, text="https://x.com/test/status/1",
+                           link_preview_options={"url": "https://x.com/test/status/1"},
+                           message_thread_id=17, is_topic_message=True, business_connection_id="fixture")
+        item = worker.TaskItem("media_dl", incoming.text, incoming, message(self.bot))
+        await asyncio.to_thread(self.manager.store.put, item)
+        recovered = worker.DownloadManager()
+        recovered._process_media = AsyncMock()
+        try:
+            await recovered.start(self.bot)
+            await asyncio.wait_for(recovered.queue.join(), 3)
+            restored = recovered._process_media.call_args.args[0].message
+            self.assertEqual(restored.from_user.id, incoming.from_user.id)
+            self.assertEqual(restored.chat.id, incoming.chat.id)
+            self.assertEqual(restored.message_thread_id, 17)
+            self.assertTrue(restored.is_topic_message)
+            self.assertEqual(restored.business_connection_id, "fixture")
+            self.assertIsNone(restored.link_preview_options)
+        finally:
+            await recovered.stop()
+
+    async def test_persistence_failure_reports_error_instead_of_leaving_preparing(self):
+        await asyncio.to_thread(self.manager.store.initialize)
+        status = AsyncMock()
+        with patch.object(self.manager.store, "put", side_effect=OSError("disk unavailable")):
+            accepted = await self.manager.add_task(worker.TaskItem("media_dl", "url", message(self.bot), status))
+        self.assertFalse(accepted)
+        status.edit_text.assert_awaited_once()
+        self.assertIn("No pude iniciar", status.edit_text.call_args.args[0])
+        self.assertTrue(self.manager.queue.empty())
         self.assertEqual(await asyncio.to_thread(self.manager.store.pending), [])
 
     async def test_media_jobs_send_only_their_own_files_and_all_outputs(self):

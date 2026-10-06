@@ -22,7 +22,7 @@ from aiogram.client.telegram import TelegramAPIServer
 
 import config
 import main
-from worker import DownloadManager, TaskItem
+from worker import DownloadManager
 from video import probe, validate_video
 
 
@@ -68,7 +68,7 @@ async def run(args):
 
     try:
         await manager.start(bot)
-        await bot.send_message(args.chat_id, "Prueba funcional de pi-downloader: archivos pequeños y dos videos de la publicación de prueba.")
+        await bot.send_message(args.chat_id, "Prueba funcional de pi-downloader: archivos pequeños y multimedia de la publicación de prueba.")
         source = vault / "pi-check.txt"
         source.write_text("pi-downloader functional check\n" * 128)
         sent = await bot.send_document(args.chat_id, document="file://" + str(source), caption="Archivo pequeño de prueba")
@@ -92,9 +92,13 @@ async def run(args):
         results["zip_extraction"] = len(extracted) == 1 and extracted[0].read_text() == "Archive check\n"
         if not results["zip_extraction"]:
             raise AssertionError("Archive extraction did not produce the expected file")
-        status = await bot.send_message(args.chat_id, "Prueba de descarga y envío de multimedia…")
-        media_message = incoming(sent)
-        await manager.add_task(TaskItem("media_dl", args.media_url, media_message, status))
+        media_message = types.Message.model_validate({
+            "message_id": sent.message_id, "date": int(sent.date.timestamp()),
+            "chat": {"id": args.chat_id, "type": "private"},
+            "from": {"id": args.chat_id, "is_bot": False, "first_name": "Functional check"},
+            "text": args.media_url, "link_preview_options": {"url": args.media_url},
+        }, context={"bot": bot})
+        await main.dp.feed_update(bot, types.Update(update_id=4, message=media_message))
         await asyncio.wait_for(manager.queue.join(), config.TASK_TIMEOUT + config.MAX_MEDIA_FILES * config.VIDEO_TIMEOUT + 60)
         outputs = list(config.DIR_MEDIA_RRSS.glob("*/*.mp4"))
         originals = list(config.DIR_MEDIA_RRSS.glob("*/originals/*"))

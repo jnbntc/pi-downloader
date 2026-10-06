@@ -1,5 +1,12 @@
 # Cambios
 
+## Corrección de enlaces con vista previa
+
+- Los enlaces recibidos con vista previa de Telegram ingresan correctamente a la cola. Se guarda solo la información necesaria para responder y recuperar el trabajo, evitando los valores internos del SDK que impedían serializar el mensaje.
+- Un error al guardar un trabajo informa al usuario que no se pudo iniciar, en vez de dejar el estado «Preparando descarga».
+- La comprobación funcional de multimedia recorre el manejador de mensajes con una vista previa, además de descargar, convertir y enviar el video.
+- Tres regresiones adicionales comprueban recepción de enlaces, recuperación del contexto de respuesta y aviso ante fallas de persistencia.
+
 ## Versión inicial
 
 - Autorización obligatoria por usuario y chat, con inicio cerrado ante configuración incompleta.

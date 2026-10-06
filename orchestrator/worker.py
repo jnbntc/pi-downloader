@@ -60,7 +60,12 @@ class DownloadManager:
             if self.queue.full():
                 await notify(item.status_msg, "La cola está llena. Intentá de nuevo más tarde.")
                 return False
-            await asyncio.to_thread(self.store.put, item)
+            try:
+                await asyncio.to_thread(self.store.put, item)
+            except Exception as error:
+                logger.error("Could not persist job %s: %s", item.job_id, redact(error))
+                await notify(item.status_msg, "No pude iniciar el trabajo. Probá de nuevo más tarde.")
+                return False
             self.queue.put_nowait(item)
         logger.info("Queued job %s (%s)", item.job_id, item.task_type)
         await notify(item.status_msg, f"Trabajo recibido. En cola: {self.queue.qsize()}.")
